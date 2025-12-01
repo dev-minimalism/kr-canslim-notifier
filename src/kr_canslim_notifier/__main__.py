@@ -1,5 +1,7 @@
 """Entry point for running the bot as a module: python -m kr_canslim_notifier"""
 
+import argparse
+import sys
 import time
 from datetime import datetime, timedelta
 
@@ -7,8 +9,8 @@ from .bot import BreakoutDetector
 from .settings import settings
 
 
-def main():
-    """Main entry point."""
+def run_bot():
+    """Run the main bot."""
     if not settings.is_configured():
         print("⚠️  .env 파일 설정이 필요합니다:")
         print("   1. .env.example을 .env로 복사")
@@ -69,5 +71,38 @@ def main():
         detector.send_telegram_message("⛔ 한국 주식 돌파 탐지 봇 종료")
 
 
+def run_backtest_cmd():
+    """Run backtest."""
+    from .backtest import run_backtest
+
+    run_backtest()
+
+
+def main():
+    """Main entry point with subcommands."""
+    parser = argparse.ArgumentParser(
+        prog="kr_canslim_notifier",
+        description="한국 주식 피벗 돌파 신호 탐지 시스템",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="사용 가능한 명령어")
+
+    # Backtest subcommand
+    subparsers.add_parser(
+        "backtest",
+        help="백테스트 실행 (watchlist.json 전체 종목)",
+        description="피벗 돌파 전략 백테스트",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "backtest":
+        return run_backtest_cmd()
+    else:
+        # Default: run bot
+        run_bot()
+        return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

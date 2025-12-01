@@ -1,6 +1,7 @@
 """Configuration settings loaded from environment variables."""
 
 import os
+
 from dotenv import load_dotenv
 
 # Load .env file
@@ -26,6 +27,9 @@ class Settings:
 
     # Data settings
     ANALYSIS_PERIOD_DAYS: int = int(os.getenv("ANALYSIS_PERIOD_DAYS", "120"))
+
+    # Watchlist file
+    WATCHLIST_FILE: str = os.getenv("WATCHLIST_FILE", "watchlist.json")
 
     @classmethod
     def is_configured(cls) -> bool:
