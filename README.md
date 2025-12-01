@@ -20,8 +20,8 @@
 
 ```bash
 # 저장소 클론
-git clone https://github.com/dev-minimalism/can-slim-bot.git
-cd can-slim-bot
+git clone https://github.com/dev-minimalism/kr-canslim-notifier.git
+cd kr-canslim-notifier
 
 # 가상환경 생성 및 활성화
 python -m venv .venv
@@ -41,10 +41,10 @@ cp .env.example .env
 
 ```bash
 # 모듈로 실행
-python -m can_slim_bot
+python -m kr_canslim_notifier
 
 # 또는 CLI 명령어
-can-slim-bot
+kr-canslim-notifier
 ```
 
 ### 텔레그램 명령어
@@ -80,8 +80,8 @@ ANALYSIS_PERIOD_DAYS=120
 ## Project Structure
 
 ```
-can-slim-bot/
-├── src/can_slim_bot/
+kr-canslim-notifier/
+├── src/kr_canslim_notifier/
 │   ├── __main__.py      # 진입점
 │   ├── bot.py           # 메인 봇 클래스
 │   └── settings.py      # 환경 설정

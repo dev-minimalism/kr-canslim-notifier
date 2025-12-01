@@ -1,4 +1,4 @@
-"""Entry point for running the bot as a module: python -m can_slim_bot"""
+"""Entry point for running the bot as a module: python -m kr_canslim_notifier"""
 
 import time
 from datetime import datetime, timedelta

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "can-slim-bot"
+name = "kr-canslim-notifier"
 version = "1.0.0"
 description = "한국 주식 피벗 돌파 신호 탐지 시스템"
 readme = "README.md"
@@ -41,14 +41,14 @@ dev = [
 ]
 
 [project.scripts]
-can-slim-bot = "can_slim_bot.__main__:main"
+kr-canslim-notifier = "kr_canslim_notifier.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/dev-minimalism/can-slim-bot"
-Repository = "https://github.com/dev-minimalism/can-slim-bot"
+Homepage = "https://github.com/dev-minimalism/kr-canslim-notifier"
+Repository = "https://github.com/dev-minimalism/kr-canslim-notifier"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/can_slim_bot"]
+packages = ["src/kr_canslim_notifier"]
 
 [tool.black]
 line-length = 88

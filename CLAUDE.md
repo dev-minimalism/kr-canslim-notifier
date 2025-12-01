@@ -18,10 +18,10 @@ pip install -e .
 ### Run the Bot
 ```bash
 # As module
-python -m can_slim_bot
+python -m kr_canslim_notifier
 
 # Or via entry point (after pip install)
-can-slim-bot
+kr-canslim-notifier
 ```
 
 ### Development
@@ -35,11 +35,11 @@ ruff check src/
 ## Project Structure
 
 ```
-can-slim-bot/
+kr-canslim-notifier/
 ├── src/
-│   └── can_slim_bot/
+│   └── kr_canslim_notifier/
 │       ├── __init__.py
-│       ├── __main__.py      # Entry point (python -m can_slim_bot)
+│       ├── __main__.py      # Entry point (python -m kr_canslim_notifier)
 │       ├── bot.py           # BreakoutDetector class
 │       └── settings.py      # Environment variable loading
 ├── tests/
@@ -52,13 +52,13 @@ can-slim-bot/
 
 ### Core Modules
 
-**`src/can_slim_bot/bot.py`** - `BreakoutDetector` class:
+**`src/kr_canslim_notifier/bot.py`** - `BreakoutDetector` class:
 - Telegram command listener (background thread)
 - Korean market time detection (09:00-15:30)
 - Position tracking with automatic stop-loss/take-profit
 - Concurrent scan prevention via threading lock
 
-**`src/can_slim_bot/settings.py`** - `Settings` class:
+**`src/kr_canslim_notifier/settings.py`** - `Settings` class:
 - Environment variable loading via python-dotenv
 - All configurable parameters with defaults
 
