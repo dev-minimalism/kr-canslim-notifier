@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables (sensitive)
+.env
+.env.local
+.env.*.local
+
+# Config files with sensitive data
+config.py
+
+# Runtime data files (may contain personal info)
+positions.json
+watchlist.json
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

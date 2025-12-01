@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "can-slim-bot"
+version = "1.0.0"
+description = "한국 주식 피벗 돌파 신호 탐지 시스템"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["trading", "stocks", "korean-stocks", "pykrx", "telegram-bot", "breakout"]
+authors = [
+    { name = "Developer" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "pykrx>=1.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+can-slim-bot = "can_slim_bot.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/dev-minimalism/can-slim-bot"
+Repository = "https://github.com/dev-minimalism/can-slim-bot"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/can_slim_bot"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
