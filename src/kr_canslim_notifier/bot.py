@@ -4,7 +4,7 @@ Korean Stock Breakout Detection Bot
 Features:
 - Pivot point breakout detection
 - Telegram command-based stock management
-- Position management with stop-loss/take-profit
+- Position management with stop-loss/take-profit (JSON or PostgreSQL)
 - Automatic market hours detection
 """
 
@@ -25,6 +25,28 @@ from .settings import settings
 
 warnings.filterwarnings("ignore")
 
+# Lazy import for DB modules (only when USE_DB=true)
+_position_repo = None
+_db = None
+
+
+def _get_position_repo():
+    """Get PositionRepository instance (lazy initialization)."""
+    global _position_repo
+    if _position_repo is None:
+        from .repository import PositionRepository
+        _position_repo = PositionRepository()
+    return _position_repo
+
+
+def _get_db():
+    """Get DatabaseConnection instance (lazy initialization)."""
+    global _db
+    if _db is None:
+        from .database import get_db
+        _db = get_db()
+    return _db
+
 
 class BreakoutDetector:
     """Korean stock breakout pattern detection class."""
@@ -35,6 +57,7 @@ class BreakoutDetector:
         chat_id: str,
         watchlist_file: str = "watchlist.json",
         positions_file: str = "positions.json",
+        use_db: bool = None,
     ):
         """
         Initialize the detector.
@@ -44,6 +67,7 @@ class BreakoutDetector:
             chat_id: Telegram chat ID
             watchlist_file: Watchlist storage file
             positions_file: Position storage file
+            use_db: Use PostgreSQL for positions (default: settings.USE_DB)
         """
         self.telegram_token = telegram_token
         self.chat_id = chat_id
@@ -52,17 +76,37 @@ class BreakoutDetector:
         self.positions_file = positions_file
         self.last_update_id = 0
 
+        # Determine storage backend
+        self.use_db = use_db if use_db is not None else settings.USE_DB
+
         # Concurrent scan prevention lock
         self.scan_lock = threading.Lock()
         self.is_scanning = False
+
+        # Initialize DB if needed
+        if self.use_db:
+            self._init_db()
 
         # Load watchlist and positions
         self.watchlist = self.load_watchlist()
         self.positions = self.load_positions()
 
+        storage_type = "PostgreSQL" if self.use_db else "JSON"
+        print(f"✅ Storage: {storage_type}")
         print("✅ Watchlist loaded")
         print(f"   🇰🇷 종목 수: {len(self.watchlist)}")
         print(f"✅ Positions loaded: {len(self.positions)}")
+
+    def _init_db(self):
+        """Initialize database connection and schema."""
+        try:
+            db = _get_db()
+            db.init_schema()
+            print("✅ Database initialized")
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            print("⚠️  Falling back to JSON storage")
+            self.use_db = False
 
     # ========================================
     # Watchlist Management
@@ -162,7 +206,16 @@ class BreakoutDetector:
     # ========================================
 
     def load_positions(self) -> List[Dict]:
-        """Load positions from file."""
+        """Load positions from storage (DB or file)."""
+        if self.use_db:
+            try:
+                repo = _get_position_repo()
+                return repo.get_all_open()
+            except Exception as e:
+                print(f"⚠️  Failed to load positions from DB: {e}")
+                return []
+
+        # JSON file storage
         if os.path.exists(self.positions_file):
             try:
                 with open(self.positions_file, "r", encoding="utf-8") as f:
@@ -173,7 +226,10 @@ class BreakoutDetector:
         return []
 
     def save_positions(self) -> bool:
-        """Save positions to file."""
+        """Save positions to file (only for JSON mode)."""
+        if self.use_db:
+            return True  # DB handles persistence automatically
+
         try:
             data = {
                 "positions": self.positions,
@@ -190,6 +246,18 @@ class BreakoutDetector:
         self, ticker: str, entry_price: float, pattern: str, signal: Dict
     ):
         """Add new position."""
+        if self.use_db:
+            try:
+                repo = _get_position_repo()
+                repo.add(ticker, entry_price, pattern, signal)
+                # Refresh positions list
+                self.positions = self.load_positions()
+                return
+            except Exception as e:
+                print(f"❌ Failed to add position to DB: {e}")
+                return
+
+        # JSON file storage
         position = {
             "ticker": ticker,
             "entry_price": entry_price,
@@ -205,6 +273,21 @@ class BreakoutDetector:
 
     def close_position(self, ticker: str, exit_price: float, reason: str) -> bool:
         """Close position."""
+        if self.use_db:
+            try:
+                repo = _get_position_repo()
+                result = repo.close(ticker, exit_price, reason)
+                if result:
+                    self._send_close_message(result, reason)
+                    # Refresh positions list
+                    self.positions = self.load_positions()
+                    return True
+                return False
+            except Exception as e:
+                print(f"❌ Failed to close position in DB: {e}")
+                return False
+
+        # JSON file storage
         for pos in self.positions:
             if pos["ticker"] == ticker:
                 entry_price = pos["entry_price"]
@@ -215,17 +298,42 @@ class BreakoutDetector:
                 )
                 holding_days = (datetime.now() - entry_date).days
 
-                try:
-                    name = stock.get_market_ticker_name(ticker)
-                    ticker_display = f"{name}({ticker})"
-                except:
-                    ticker_display = ticker
+                result = {
+                    "ticker": ticker,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "profit_pct": profit_pct,
+                    "holding_days": holding_days,
+                    "pattern": pos.get("pattern"),
+                }
+                self._send_close_message(result, reason)
 
-                msg = f"""
+                self.positions.remove(pos)
+                self.save_positions()
+                print(f"  ❌ Position closed: {ticker} ({reason}) {profit_pct:+.2f}%")
+                return True
+        return False
+
+    def _send_close_message(self, result: Dict, reason: str):
+        """Send position close message to Telegram."""
+        ticker = result["ticker"]
+        entry_price = result["entry_price"]
+        exit_price = result["exit_price"]
+        profit_pct = result["profit_pct"]
+        holding_days = result.get("holding_days", 0)
+        pattern = result.get("pattern", "")
+
+        try:
+            name = stock.get_market_ticker_name(ticker)
+            ticker_display = f"{name}({ticker})"
+        except:
+            ticker_display = ticker
+
+        msg = f"""
 🇰🇷 <b>[포지션 종료]</b>
 
 🏢 종목: <b>{ticker_display}</b>
-📊 패턴: {pos['pattern']}
+📊 패턴: {pattern}
 💰 진입가: {entry_price:,.0f}원
 💵 종료가: {exit_price:,.0f}원
 {'📈' if profit_pct > 0 else '📉'} 수익률: {profit_pct:+.2f}%
@@ -235,15 +343,19 @@ class BreakoutDetector:
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
-                self.send_telegram_message(msg)
-                self.positions.remove(pos)
-                self.save_positions()
-                print(f"  ❌ Position closed: {ticker} ({reason}) {profit_pct:+.2f}%")
-                return True
-        return False
+        self.send_telegram_message(msg)
+
+    def _parse_entry_date(self, entry_date) -> datetime:
+        """Parse entry_date to datetime object."""
+        if isinstance(entry_date, datetime):
+            return entry_date
+        return datetime.strptime(entry_date, "%Y-%m-%d %H:%M:%S")
 
     def check_positions(self):
         """Check and manage open positions."""
+        # Refresh positions from storage
+        self.positions = self.load_positions()
+
         if not self.positions:
             return
 
@@ -251,8 +363,8 @@ class BreakoutDetector:
 
         for pos in self.positions.copy():
             ticker = pos["ticker"]
-            entry_price = pos["entry_price"]
-            entry_date = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M:%S")
+            entry_price = float(pos["entry_price"])
+            entry_date = self._parse_entry_date(pos["entry_date"])
             holding_days = (datetime.now() - entry_date).days
 
             try:
@@ -290,6 +402,9 @@ class BreakoutDetector:
 
     def list_positions(self) -> str:
         """Get positions display string."""
+        # Refresh positions from storage
+        self.positions = self.load_positions()
+
         if not self.positions:
             return "📊 <b>보유 포지션</b>\n\n보유 중인 포지션이 없습니다."
 
@@ -297,7 +412,7 @@ class BreakoutDetector:
 
         for i, pos in enumerate(self.positions, 1):
             ticker = pos["ticker"]
-            entry_date = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M:%S")
+            entry_date = self._parse_entry_date(pos["entry_date"])
             holding_days = (datetime.now() - entry_date).days
 
             try:
@@ -332,6 +447,37 @@ class BreakoutDetector:
 """
 
         return msg
+
+    def get_trade_stats(self) -> str:
+        """Get trading statistics (DB mode only)."""
+        if not self.use_db:
+            return "📊 <b>거래 통계</b>\n\n⚠️ 통계 기능은 DB 모드에서만 사용 가능합니다.\n.env에서 USE_DB=true로 설정해주세요."
+
+        try:
+            repo = _get_position_repo()
+            stats = repo.get_stats()
+
+            if not stats or stats.get("total_trades", 0) == 0:
+                return "📊 <b>거래 통계</b>\n\n아직 완료된 거래가 없습니다."
+
+            msg = f"""📊 <b>거래 통계</b>
+
+<b>전체 거래:</b> {stats['total_trades']}건
+<b>승리:</b> {stats['winning_trades']}건
+<b>패배:</b> {stats['losing_trades']}건
+<b>승률:</b> {stats['win_rate']:.1f}%
+
+<b>평균 수익률:</b> {stats['avg_profit_pct']:+.2f}%
+<b>총 수익률:</b> {stats['total_profit_pct']:+.2f}%
+<b>최대 수익:</b> {stats['max_profit_pct']:+.2f}%
+<b>최대 손실:</b> {stats['max_loss_pct']:+.2f}%
+
+<b>평균 보유일:</b> {stats['avg_holding_days']:.1f}일
+"""
+            return msg
+
+        except Exception as e:
+            return f"❌ 통계 조회 오류: {e}"
 
     # ========================================
     # Market Status
@@ -415,6 +561,7 @@ class BreakoutDetector:
 
 <b>기타:</b>
 /status - 시장 상태 확인
+/stats - 거래 통계 (DB 모드)
 /help - 도움말
 
 <b>탐지 조건:</b>
@@ -444,6 +591,9 @@ class BreakoutDetector:
 
         elif command == "/positions":
             return self.list_positions()
+
+        elif command == "/stats":
+            return self.get_trade_stats()
 
         elif command == "/close":
             if len(parts) < 2:
@@ -677,19 +827,23 @@ class BreakoutDetector:
                 try:
                     name = self.get_stock_name(ticker)
                     print(f"  🔍 {name}({ticker})...", end=" ")
+
+                    # 이미 포지션이 있으면 스킵
+                    if any(p["ticker"] == ticker for p in self.positions):
+                        print("📌 보유중")
+                        continue
+
                     signal = self.analyze_stock(ticker)
                     if signal:
                         all_signals.append(signal)
                         msg = self.format_signal_message(signal)
                         self.send_telegram_message(msg)
-
-                        if not any(p["ticker"] == ticker for p in self.positions):
-                            self.add_position(
-                                ticker=ticker,
-                                entry_price=signal["current_price"],
-                                pattern=signal["pattern"],
-                                signal=signal,
-                            )
+                        self.add_position(
+                            ticker=ticker,
+                            entry_price=signal["current_price"],
+                            pattern=signal["pattern"],
+                            signal=signal,
+                        )
                         print("✅ 신호 발생!")
                         time.sleep(2)
                     else:

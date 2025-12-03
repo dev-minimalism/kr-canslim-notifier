@@ -31,6 +31,22 @@ class Settings:
     # Watchlist file
     WATCHLIST_FILE: str = os.getenv("WATCHLIST_FILE", "watchlist.json")
 
+    # SSH Tunnel settings (PostgreSQL)
+    SSH_HOST: str = os.getenv("SSH_HOST", "")
+    SSH_PORT: int = int(os.getenv("SSH_PORT", "22"))
+    SSH_USER: str = os.getenv("SSH_USER", "")
+    SSH_KEY_PATH: str = os.getenv("SSH_KEY_PATH", "~/.ssh/id_rsa")
+
+    # PostgreSQL settings
+    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
+    DB_NAME: str = os.getenv("DB_NAME", "")
+    DB_USER: str = os.getenv("DB_USER", "")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+
+    # Use DB for positions (if False, use JSON file)
+    USE_DB: bool = os.getenv("USE_DB", "false").lower() == "true"
+
     @classmethod
     def is_configured(cls) -> bool:
         """Check if required settings are configured."""
@@ -38,6 +54,17 @@ class Settings:
             cls.TELEGRAM_TOKEN
             and cls.TELEGRAM_TOKEN != "YOUR_BOT_TOKEN_HERE"
             and cls.CHAT_ID
+        )
+
+    @classmethod
+    def is_db_configured(cls) -> bool:
+        """Check if database settings are configured."""
+        return bool(
+            cls.SSH_HOST
+            and cls.SSH_USER
+            and cls.DB_NAME
+            and cls.DB_USER
+            and cls.DB_PASSWORD
         )
 
 

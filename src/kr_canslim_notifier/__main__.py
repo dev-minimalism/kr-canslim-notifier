@@ -78,6 +78,28 @@ def run_backtest_cmd():
     run_backtest()
 
 
+def init_db_cmd():
+    """Initialize database schema."""
+    from .database import get_db
+
+    if not settings.is_db_configured():
+        print("❌ DB 설정이 필요합니다:")
+        print("   .env 파일에서 다음 항목을 설정하세요:")
+        print("   - SSH_HOST, SSH_USER, SSH_KEY_PATH")
+        print("   - DB_NAME, DB_USER, DB_PASSWORD")
+        return 1
+
+    print("🔄 Connecting to database...")
+    try:
+        db = get_db()
+        db.init_schema()
+        print("✅ Database schema initialized successfully!")
+        return 0
+    except Exception as e:
+        print(f"❌ Failed to initialize database: {e}")
+        return 1
+
+
 def main():
     """Main entry point with subcommands."""
     parser = argparse.ArgumentParser(
@@ -94,10 +116,19 @@ def main():
         description="피벗 돌파 전략 백테스트",
     )
 
+    # DB init subcommand
+    subparsers.add_parser(
+        "init-db",
+        help="데이터베이스 스키마 초기화",
+        description="PostgreSQL 데이터베이스에 테이블 생성",
+    )
+
     args = parser.parse_args()
 
     if args.command == "backtest":
         return run_backtest_cmd()
+    elif args.command == "init-db":
+        return init_db_cmd()
     else:
         # Default: run bot
         run_bot()
