@@ -1,14 +1,12 @@
 """Database connection module with SSH tunnel support."""
 
 import os
-import socket
-import threading
 from contextlib import contextmanager
 from typing import Optional, Generator
 
-import paramiko
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from sshtunnel import SSHTunnelForwarder
 
 from .settings import settings
 
@@ -17,16 +15,8 @@ class SSHTunnel:
     """SSH tunnel manager for database connection."""
 
     def __init__(self):
-        self.ssh_client: Optional[paramiko.SSHClient] = None
+        self.tunnel: Optional[SSHTunnelForwarder] = None
         self.local_port: int = 0
-        self._lock = threading.Lock()
-        self._is_connected = False
-
-    def _find_free_port(self) -> int:
-        """Find a free local port."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("localhost", 0))
-            return s.getsockname()[1]
 
     def connect(self) -> int:
         """
@@ -35,96 +25,38 @@ class SSHTunnel:
         Returns:
             Local port number for database connection.
         """
-        with self._lock:
-            if self._is_connected:
-                return self.local_port
+        if self.tunnel and self.tunnel.is_active:
+            return self.local_port
 
-            try:
-                # Expand SSH key path
-                key_path = os.path.expanduser(settings.SSH_KEY_PATH)
+        try:
+            # Expand SSH key path
+            key_path = os.path.expanduser(settings.SSH_KEY_PATH)
 
-                # Create SSH client
-                self.ssh_client = paramiko.SSHClient()
-                self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Create SSH tunnel
+            self.tunnel = SSHTunnelForwarder(
+                (settings.SSH_HOST, settings.SSH_PORT),
+                ssh_username=settings.SSH_USER,
+                ssh_pkey=key_path,
+                remote_bind_address=(settings.DB_HOST, settings.DB_PORT),
+            )
 
-                # Load private key
-                private_key = paramiko.RSAKey.from_private_key_file(key_path)
+            # Start tunnel
+            self.tunnel.start()
+            self.local_port = self.tunnel.local_bind_port
 
-                # Connect to SSH server
-                self.ssh_client.connect(
-                    hostname=settings.SSH_HOST,
-                    port=settings.SSH_PORT,
-                    username=settings.SSH_USER,
-                    pkey=private_key,
-                )
+            print(f"✅ SSH tunnel established (local port: {self.local_port})")
+            return self.local_port
 
-                # Find free local port
-                self.local_port = self._find_free_port()
-
-                # Create port forwarding
-                transport = self.ssh_client.get_transport()
-                transport.request_port_forward("localhost", self.local_port)
-
-                # Start local forwarding thread
-                self._start_forward_thread(transport)
-
-                self._is_connected = True
-                print(f"✅ SSH tunnel established (local port: {self.local_port})")
-                return self.local_port
-
-            except Exception as e:
-                print(f"❌ SSH tunnel failed: {e}")
-                self.close()
-                raise
-
-    def _start_forward_thread(self, transport: paramiko.Transport):
-        """Start port forwarding in background thread."""
-
-        def forward_handler():
-            while self._is_connected:
-                try:
-                    channel = transport.accept(timeout=1)
-                    if channel is None:
-                        continue
-
-                    # Connect to remote database
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.connect((settings.DB_HOST, settings.DB_PORT))
-
-                    # Forward data between channel and socket
-                    def forward(src, dst):
-                        try:
-                            while True:
-                                data = src.recv(1024)
-                                if not data:
-                                    break
-                                dst.sendall(data)
-                        except:
-                            pass
-                        finally:
-                            src.close()
-                            dst.close()
-
-                    threading.Thread(
-                        target=forward, args=(channel, sock), daemon=True
-                    ).start()
-                    threading.Thread(
-                        target=forward, args=(sock, channel), daemon=True
-                    ).start()
-
-                except Exception:
-                    if not self._is_connected:
-                        break
-
-        threading.Thread(target=forward_handler, daemon=True).start()
+        except Exception as e:
+            print(f"❌ SSH tunnel failed: {e}")
+            self.close()
+            raise
 
     def close(self):
         """Close SSH tunnel."""
-        with self._lock:
-            self._is_connected = False
-            if self.ssh_client:
-                self.ssh_client.close()
-                self.ssh_client = None
+        if self.tunnel:
+            self.tunnel.stop()
+            self.tunnel = None
             print("🔒 SSH tunnel closed")
 
 
