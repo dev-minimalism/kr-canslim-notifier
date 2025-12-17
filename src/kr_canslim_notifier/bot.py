@@ -136,8 +136,11 @@ class BreakoutDetector:
                 "tickers": self.watchlist,
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            with open(self.watchlist_file, "w", encoding="utf-8") as f:
+            # Atomic write: 임시 파일에 쓴 후 rename (파일 손상 방지)
+            tmp_file = self.watchlist_file + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, self.watchlist_file)
             return True
         except Exception as e:
             print(f"❌ Failed to save watchlist: {e}")
@@ -235,8 +238,11 @@ class BreakoutDetector:
                 "positions": self.positions,
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            with open(self.positions_file, "w", encoding="utf-8") as f:
+            # Atomic write: 임시 파일에 쓴 후 rename (파일 손상 방지)
+            tmp_file = self.positions_file + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, self.positions_file)
             return True
         except Exception as e:
             print(f"❌ Failed to save positions: {e}")
@@ -635,8 +641,7 @@ class BreakoutDetector:
         try:
             self.is_scanning = True
             print("\n🔔 Scan command received - starting scan")
-            self.run_scan()
-            self.send_telegram_message("✅ 스캔 완료!")
+            self.run_scan(manual=True)
         except Exception as e:
             print(f"❌ Scan error: {e}")
             self.send_telegram_message(f"❌ 스캔 오류: {str(e)}")
@@ -809,8 +814,12 @@ class BreakoutDetector:
     # Scanning
     # ========================================
 
-    def run_scan(self) -> List[Dict]:
-        """Run scan on watchlist."""
+    def run_scan(self, manual: bool = False) -> List[Dict]:
+        """Run scan on watchlist.
+
+        Args:
+            manual: If True, always send completion message. If False, only send when signals found.
+        """
         print(f"\n{'=' * 60}")
         print("🔍 스캔 시작")
         print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -861,12 +870,14 @@ class BreakoutDetector:
 
         scan_time_str = datetime.now().strftime("%H:%M:%S")
 
-        if all_signals:
-            summary_msg = f"✅ [스캔 완료] {len(all_signals)}개 매수 신호 발견!"
-        else:
-            summary_msg = "⚪ [스캔 완료] 새로운 매수 신호 없음"
+        # 수동 스캔이거나 신호가 있을 때만 완료 메시지 전송
+        if manual or all_signals:
+            if all_signals:
+                summary_msg = f"✅ [스캔 완료] {len(all_signals)}개 매수 신호 발견!"
+            else:
+                summary_msg = "⚪ [스캔 완료] 새로운 매수 신호 없음"
 
-        self.send_telegram_message(f"{summary_msg}\n⏰ ({scan_time_str})")
+            self.send_telegram_message(f"{summary_msg}\n⏰ ({scan_time_str})")
 
         return all_signals
 
