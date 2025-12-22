@@ -18,6 +18,10 @@ class SSHTunnel:
         self.tunnel: Optional[SSHTunnelForwarder] = None
         self.local_port: int = 0
 
+    def is_connected(self) -> bool:
+        """Check if SSH tunnel is active."""
+        return self.tunnel is not None and self.tunnel.is_active
+
     def connect(self) -> int:
         """
         Establish SSH tunnel and return local port.
@@ -25,8 +29,11 @@ class SSHTunnel:
         Returns:
             Local port number for database connection.
         """
-        if self.tunnel and self.tunnel.is_active:
+        if self.is_connected():
             return self.local_port
+
+        # Close stale tunnel if exists
+        self.close()
 
         try:
             # Expand SSH key path
@@ -55,17 +62,42 @@ class SSHTunnel:
     def close(self):
         """Close SSH tunnel."""
         if self.tunnel:
-            self.tunnel.stop()
+            try:
+                self.tunnel.stop()
+            except Exception:
+                pass
             self.tunnel = None
-            print("🔒 SSH tunnel closed")
 
 
 class DatabaseConnection:
     """PostgreSQL database connection manager with SSH tunnel."""
 
+    MAX_RETRIES = 2
+
     def __init__(self):
         self.tunnel = SSHTunnel()
         self._connection: Optional[psycopg2.extensions.connection] = None
+
+    def _is_connection_alive(self) -> bool:
+        """Check if database connection is alive."""
+        if not self._connection or self._connection.closed:
+            return False
+        try:
+            # Quick ping to check connection
+            with self._connection.cursor() as cur:
+                cur.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+
+    def _close_connection(self):
+        """Close database connection safely."""
+        if self._connection:
+            try:
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
 
     def connect(self) -> psycopg2.extensions.connection:
         """
@@ -74,10 +106,13 @@ class DatabaseConnection:
         Returns:
             PostgreSQL connection object.
         """
-        if self._connection and not self._connection.closed:
+        if self._is_connection_alive():
             return self._connection
 
-        # Establish SSH tunnel
+        # Close stale connection
+        self._close_connection()
+
+        # Establish SSH tunnel (will reconnect if needed)
         local_port = self.tunnel.connect()
 
         # Connect to database through tunnel
@@ -92,10 +127,16 @@ class DatabaseConnection:
         print(f"✅ Database connected: {settings.DB_NAME}")
         return self._connection
 
+    def reconnect(self) -> psycopg2.extensions.connection:
+        """Force reconnect to database."""
+        self._close_connection()
+        self.tunnel.close()
+        return self.connect()
+
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True) -> Generator:
         """
-        Get database cursor as context manager.
+        Get database cursor as context manager with auto-reconnect.
 
         Args:
             dict_cursor: If True, return RealDictCursor for dict-like row access.
@@ -103,17 +144,37 @@ class DatabaseConnection:
         Yields:
             Database cursor.
         """
-        conn = self.connect()
-        cursor_factory = RealDictCursor if dict_cursor else None
-        cursor = conn.cursor(cursor_factory=cursor_factory)
-        try:
-            yield cursor
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            cursor.close()
+        last_error = None
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                conn = self.connect() if attempt == 0 else self.reconnect()
+                cursor_factory = RealDictCursor if dict_cursor else None
+                cursor = conn.cursor(cursor_factory=cursor_factory)
+                try:
+                    yield cursor
+                    conn.commit()
+                    return  # Success
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                finally:
+                    cursor.close()
+
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    print(f"⚠️ DB connection error, retrying ({attempt + 1}/{self.MAX_RETRIES})...")
+                    self._close_connection()
+                    continue
+                raise
+
+            except Exception as e:
+                # Non-connection errors should not retry
+                raise e
+
+        if last_error:
+            raise last_error
 
     def execute(self, query: str, params: tuple = None) -> list:
         """

@@ -250,18 +250,22 @@ class BreakoutDetector:
 
     def add_position(
         self, ticker: str, entry_price: float, pattern: str, signal: Dict
-    ):
-        """Add new position."""
+    ) -> bool:
+        """Add new position.
+
+        Returns:
+            True if position was saved successfully, False otherwise.
+        """
         if self.use_db:
             try:
                 repo = _get_position_repo()
                 repo.add(ticker, entry_price, pattern, signal)
                 # Refresh positions list
                 self.positions = self.load_positions()
-                return
+                return True
             except Exception as e:
                 print(f"❌ Failed to add position to DB: {e}")
-                return
+                return False
 
         # JSON file storage
         position = {
@@ -274,8 +278,13 @@ class BreakoutDetector:
             "signal": signal,
         }
         self.positions.append(position)
-        self.save_positions()
-        print(f"  📝 Position added: {ticker} @ {entry_price:,}")
+        if self.save_positions():
+            print(f"  📝 Position added: {ticker} @ {entry_price:,}")
+            return True
+        else:
+            # Rollback: remove from memory if save failed
+            self.positions.remove(position)
+            return False
 
     def close_position(self, ticker: str, exit_price: float, reason: str) -> bool:
         """Close position."""
@@ -844,16 +853,21 @@ class BreakoutDetector:
 
                     signal = self.analyze_stock(ticker)
                     if signal:
-                        all_signals.append(signal)
-                        msg = self.format_signal_message(signal)
-                        self.send_telegram_message(msg)
-                        self.add_position(
+                        # 먼저 포지션 저장 시도
+                        saved = self.add_position(
                             ticker=ticker,
                             entry_price=signal["current_price"],
                             pattern=signal["pattern"],
                             signal=signal,
                         )
-                        print("✅ 신호 발생!")
+                        if saved:
+                            # 저장 성공 시에만 텔레그램 알림 전송
+                            all_signals.append(signal)
+                            msg = self.format_signal_message(signal)
+                            self.send_telegram_message(msg)
+                            print("✅ 신호 발생!")
+                        else:
+                            print("⚠️ 포지션 저장 실패 (알림 생략)")
                         time.sleep(2)
                     else:
                         print("⚪")
