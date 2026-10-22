@@ -14,14 +14,21 @@
   - 거래량 50%+ 급증
   - 돌파율 0~5% 이내
 
-- **자동 포지션 관리**
-  - 손절 -8%, 익절 +20%, 30일 만료
+- **자동 포지션 관리 (페이퍼 트레이딩)**
+  - 매수 신호 발생 시 가상 포지션 자동 기록
+  - 손절 -8%, 익절 +20%, 30일 만료 시 자동 청산
+  - 이미 보유 중인 종목은 중복 신호 알림 생략
 
 - **텔레그램 봇 연동**
   - 실시간 알림
   - 명령어로 종목 관리
 
+- **저장소 선택**
+  - JSON 파일 (기본) 또는 SSH 터널 경유 PostgreSQL
+
 ## Installation
+
+Python 3.10 이상이 필요합니다.
 
 ```bash
 # 저장소 클론
@@ -93,7 +100,10 @@ pkill -f kr_canslim_notifier
 | `/positions` | 보유 포지션 보기 |
 | `/close 005930` | 포지션 수동 청산 |
 | `/status` | 시장 상태 확인 |
+| `/stats` | 거래 통계 (DB 모드 전용) |
 | `/help` | 도움말 |
+
+자동 스캔은 장중(평일 09:00-15:30)에만 실행되며, 새 신호가 있을 때만 알림을 보냅니다. `/scan`은 장 시간과 관계없이 실행되고 항상 완료 메시지를 보냅니다. 장 시간은 서버의 로컬 시간 기준이므로 서버 타임존을 KST로 설정하세요.
 
 ## Backtesting
 
@@ -117,8 +127,9 @@ BACKTEST_END_DATE=2024-12-31
 
 # 자본금
 BACKTEST_INITIAL_CAPITAL=10000000
+BACKTEST_POSITION_SIZE_PCT=0.1   # 종목당 투입 비율 (자본금의 10%)
 
-# 전략 파라미터
+# 전략 파라미터 (VOLUME_SURGE_MIN, BREAKOUT_MAX는 봇과 공유)
 BACKTEST_LOOKBACK_PERIOD=20
 VOLUME_SURGE_MIN=50
 BREAKOUT_MAX=5
@@ -158,21 +169,50 @@ TELEGRAM_TOKEN=your_bot_token
 CHAT_ID=your_chat_id
 
 # 선택 (기본값)
-SCAN_INTERVAL=1800
-VOLUME_SURGE_MIN=50
-BREAKOUT_MAX=5
-STOP_LOSS_PERCENT=-7.5
-ANALYSIS_PERIOD_DAYS=120
+SCAN_INTERVAL=1800      # 스캔 간격 (초)
+VOLUME_SURGE_MIN=50     # 거래량 급증 최소값 (%)
+BREAKOUT_MAX=5          # 돌파율 최대값 (%)
 ```
+
+> `.env.example`의 `STOP_LOSS_PERCENT`, `ANALYSIS_PERIOD_DAYS`는 현재 코드에서 사용되지 않습니다. 손절(-8%), 익절(+20%), 보유 기간(30일)은 코드에 고정되어 있습니다.
+
+### PostgreSQL 모드
+
+기본적으로 포지션은 `positions.json`에 저장됩니다. `USE_DB=true`로 설정하면 SSH 터널을 통해 원격 PostgreSQL에 포지션과 거래 내역(`/stats`)을 저장합니다.
+
+```env
+USE_DB=true
+
+SSH_HOST=your_ssh_host
+SSH_PORT=22
+SSH_USER=your_ssh_user
+SSH_KEY_PATH=~/.ssh/id_rsa
+
+DB_HOST=localhost   # SSH 서버 기준 DB 호스트
+DB_PORT=5432
+DB_NAME=your_db_name
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+```
+
+```bash
+# 테이블 생성 (봇 시작 시에도 자동 실행됨)
+python -m kr_canslim_notifier init-db
+```
+
+- 감시 종목(watchlist)은 DB 모드에서도 `watchlist.json`에 저장됩니다.
+- 봇 시작 시 DB 연결에 실패하면 경고 후 JSON 모드로 동작합니다.
 
 ## Project Structure
 
 ```
 kr-canslim-notifier/
 ├── src/kr_canslim_notifier/
-│   ├── __main__.py      # 진입점
-│   ├── bot.py           # 메인 봇 클래스
+│   ├── __main__.py      # 진입점 (bot / backtest / init-db)
+│   ├── bot.py           # 메인 봇 클래스 (BreakoutDetector)
 │   ├── settings.py      # 환경 설정
+│   ├── database.py      # SSH 터널 + PostgreSQL 연결
+│   ├── repository.py    # 포지션/거래 내역 DB 접근
 │   └── backtest/        # 백테스트 패키지
 │       ├── __init__.py
 │       ├── config.py    # BacktestConfig
@@ -180,13 +220,15 @@ kr-canslim-notifier/
 ├── tests/
 ├── .env.example
 ├── pyproject.toml
+├── LICENSE
 └── README.md
 ```
 
 ## Data Source
 
-- **한국 주식**: pykrx (가격 데이터)
+- **한국 주식**: [pykrx](https://github.com/sharebook-kr/pykrx) 1.2.9+ (가격 데이터)
+  - 실행 시 `KRX 로그인 실패: KRX_ID 또는 KRX_PW 환경 변수가 설정되지 않았습니다.` 메시지가 출력될 수 있습니다. 이 봇이 사용하는 OHLCV/종목명 조회는 로그인 없이 동작하므로 무시해도 됩니다.
 
 ## License
 
-MIT
+[MIT](LICENSE)
