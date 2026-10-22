@@ -238,6 +238,17 @@ class BreakoutDetector:
             print(f"❌ Failed to save positions: {e}")
             return False
 
+    def _refresh_positions_after_write(self):
+        """Reload positions after a successful DB write.
+
+        Only logs on failure: a failed reload must not turn a successful
+        write into a failure (that would skip the signal alert).
+        """
+        try:
+            self.positions = self.load_positions()
+        except Exception as e:
+            print(f"⚠️  Failed to refresh positions: {e}")
+
     def add_position(
         self, ticker: str, entry_price: float, pattern: str, signal: Dict
     ) -> bool:
@@ -250,12 +261,11 @@ class BreakoutDetector:
             try:
                 repo = _get_position_repo()
                 repo.add(ticker, entry_price, pattern, signal)
-                # Refresh positions list
-                self.positions = self.load_positions()
-                return True
             except Exception as e:
                 print(f"❌ Failed to add position to DB: {e}")
                 return False
+            self._refresh_positions_after_write()
+            return True
 
         # JSON file storage
         position = {
@@ -282,15 +292,14 @@ class BreakoutDetector:
             try:
                 repo = _get_position_repo()
                 result = repo.close(ticker, exit_price, reason)
-                if result:
-                    self._send_close_message(result, reason)
-                    # Refresh positions list
-                    self.positions = self.load_positions()
-                    return True
-                return False
             except Exception as e:
                 print(f"❌ Failed to close position in DB: {e}")
                 return False
+            if not result:
+                return False
+            self._send_close_message(result, reason)
+            self._refresh_positions_after_write()
+            return True
 
         # JSON file storage
         for pos in self.positions:
