@@ -114,7 +114,7 @@ class PositionRepository:
         profit_pct = ((exit_price - entry_price) / entry_price) * 100
         holding_days = (datetime.now() - entry_date).days
 
-        # Update position to closed
+        # Update position to closed (only if still open)
         update_query = """
             UPDATE positions
             SET status = 'closed',
@@ -123,11 +123,9 @@ class PositionRepository:
                 exit_reason = %s,
                 profit_pct = %s,
                 updated_at = NOW()
-            WHERE id = %s
+            WHERE id = %s AND status = 'open'
+            RETURNING id
         """
-        self.db.execute(
-            update_query, (exit_price, reason, profit_pct, position["id"])
-        )
 
         # Insert into trade history
         history_query = """
@@ -136,20 +134,29 @@ class PositionRepository:
              exit_reason, profit_pct, holding_days, pattern)
             VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s)
         """
-        self.db.execute(
-            history_query,
-            (
-                position["id"],
-                ticker,
-                entry_price,
-                entry_date,
-                exit_price,
-                reason,
-                profit_pct,
-                holding_days,
-                position.get("pattern"),
-            ),
-        )
+
+        # One transaction. If another connection closed the position after our
+        # SELECT, the status guard matches no row and we record nothing.
+        with self.db.get_cursor() as cursor:
+            cursor.execute(
+                update_query, (exit_price, reason, profit_pct, position["id"])
+            )
+            if cursor.fetchone() is None:
+                return None
+            cursor.execute(
+                history_query,
+                (
+                    position["id"],
+                    ticker,
+                    entry_price,
+                    entry_date,
+                    exit_price,
+                    reason,
+                    profit_pct,
+                    holding_days,
+                    position.get("pattern"),
+                ),
+            )
 
         print(f"  ❌ Position closed (DB): {ticker} ({reason}) {profit_pct:+.2f}%")
 

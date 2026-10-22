@@ -83,6 +83,11 @@ class BreakoutDetector:
         self.scan_lock = threading.Lock()
         self.is_scanning = False
 
+        # Guards self.positions and position storage. Scans and /close (listener
+        # thread) both close positions; without it one position can close twice.
+        # Reentrant because writes refresh the list while holding it.
+        self.positions_lock = threading.RLock()
+
         # Initialize DB if needed
         if self.use_db:
             self._init_db()
@@ -257,6 +262,13 @@ class BreakoutDetector:
         Returns:
             True if position was saved successfully, False otherwise.
         """
+        with self.positions_lock:
+            return self._add_position(ticker, entry_price, pattern, signal)
+
+    def _add_position(
+        self, ticker: str, entry_price: float, pattern: str, signal: Dict
+    ) -> bool:
+        """add_position body. Caller holds positions_lock."""
         if self.use_db:
             try:
                 repo = _get_position_repo()
@@ -287,7 +299,17 @@ class BreakoutDetector:
             return False
 
     def close_position(self, ticker: str, exit_price: float, reason: str) -> bool:
-        """Close position."""
+        """Close position.
+
+        Returns:
+            True if closed, False if it was not open (e.g. already closed by
+            another thread) or the close could not be saved.
+        """
+        with self.positions_lock:
+            return self._close_position(ticker, exit_price, reason)
+
+    def _close_position(self, ticker: str, exit_price: float, reason: str) -> bool:
+        """close_position body. Caller holds positions_lock."""
         if self.use_db:
             try:
                 repo = _get_position_repo()
@@ -368,7 +390,8 @@ class BreakoutDetector:
         """
         # Refresh positions from storage
         try:
-            self.positions = self.load_positions()
+            with self.positions_lock:
+                self.positions = self.load_positions()
         except Exception as e:
             print(f"❌ Failed to load positions: {e}")
             return False
@@ -419,18 +442,19 @@ class BreakoutDetector:
 
     def list_positions(self) -> str:
         """Get positions display string."""
-        # Refresh positions from storage
+        # Read into a local list: replacing self.positions here (listener thread)
+        # could drop a position a running scan just added
         try:
-            self.positions = self.load_positions()
+            positions = self.load_positions()
         except Exception as e:
             return f"❌ 포지션 조회 실패: {e}"
 
-        if not self.positions:
+        if not positions:
             return "📊 <b>보유 포지션</b>\n\n보유 중인 포지션이 없습니다."
 
-        msg = f"📊 <b>보유 포지션</b> ({len(self.positions)}개)\n\n"
+        msg = f"📊 <b>보유 포지션</b> ({len(positions)}개)\n\n"
 
-        for i, pos in enumerate(self.positions, 1):
+        for i, pos in enumerate(positions, 1):
             ticker = pos["ticker"]
             entry_date = self._parse_entry_date(pos["entry_date"])
             holding_days = (datetime.now() - entry_date).days
@@ -615,8 +639,9 @@ class BreakoutDetector:
                 return "❌ 사용법: /close [종목코드]\n예) /close 005930"
 
             ticker = parts[1].strip()
-            pos = next((p for p in self.positions if p["ticker"] == ticker), None)
-            if not pos:
+            with self.positions_lock:
+                held = any(p["ticker"] == ticker for p in self.positions)
+            if not held:
                 return f"❌ 포지션 없음: {ticker}"
 
             try:
@@ -624,8 +649,11 @@ class BreakoutDetector:
 
                 if df is not None and len(df) > 0:
                     current_price = df["Close"].iloc[-1]
-                    self.close_position(ticker, current_price, "수동 청산")
-                    return f"✅ {ticker} 포지션 청산됨"
+                    # close_position re-checks under the lock: if a scan closed
+                    # it while we fetched the price, this returns False
+                    if self.close_position(ticker, current_price, "수동 청산"):
+                        return f"✅ {ticker} 포지션 청산됨"
+                    return f"❌ {ticker} 포지션 청산 실패 (이미 청산되었거나 저장 오류)"
                 else:
                     return f"❌ {ticker} 현재가 조회 실패"
             except Exception as e:

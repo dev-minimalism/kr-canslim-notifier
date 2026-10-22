@@ -32,7 +32,13 @@ black src/ && ruff check src/
 Everything runs in one process with two threads, plus one for each manual scan:
 
 1. **Main loop** (`__main__.run_bot`): calls `BreakoutDetector.run_scheduled_scan()` every `SCAN_INTERVAL` seconds (default 1800). Outside market hours it only runs `check_positions()`.
-2. **Command listener** (`start_command_listener`, daemon thread): long-polls Telegram `getUpdates` and only handles messages whose chat id matches `CHAT_ID`. `process_command` returns either a reply string or the sentinel `"SCAN"`. `"SCAN"` starts `_execute_scan_in_thread` in a new daemon thread. Manual and scheduled scans both take `scan_lock` with a non-blocking acquire and set `is_scanning`. If a scan is already running, the other one is skipped. Any new code path that scans or closes positions must hold the same lock, or duplicate alerts and closes come back.
+2. **Command listener** (`start_command_listener`, daemon thread): long-polls Telegram `getUpdates` and only handles messages whose chat id matches `CHAT_ID`. `process_command` returns either a reply string or the sentinel `"SCAN"`. `"SCAN"` starts `_execute_scan_in_thread` in a new daemon thread. Manual and scheduled scans both take `scan_lock` with a non-blocking acquire and set `is_scanning`. If a scan is already running, the other one is skipped. Any new code path that scans must take `scan_lock`.
+
+Position state has its own lock, `positions_lock` (an `RLock`):
+- `add_position()` and `close_position()` take it internally; the `_add_position` / `_close_position` bodies assume it is held.
+- `close_position()` returns `False` if the position is no longer open, so a scan and `/close` on the listener thread can't close the same position twice.
+- Code running on the listener thread must never reassign `self.positions`. `/positions` reads into a local list.
+- `repository.close()` also uses `WHERE status = 'open'` with `UPDATE` and `INSERT` in one transaction, so a second close is a no-op even across processes.
 
 `bot.py` (`BreakoutDetector`) holds nearly all the logic: watchlist, positions, Telegram I/O, data fetching, signal detection and scanning.
 
