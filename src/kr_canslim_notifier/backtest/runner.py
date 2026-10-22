@@ -167,12 +167,13 @@ class PivotBreakoutBacktester:
             print("❌ 시뮬레이션할 데이터 없음")
             return
 
-        # Get trading dates from first ticker
-        first_ticker = list(self.price_data.keys())[0]
+        # Union of all tickers' dates (any single ticker may be newly listed or halted)
         start_dt = datetime.strptime(self.config.start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(self.config.end_date, "%Y-%m-%d")
 
-        all_dates = self.price_data[first_ticker].index
+        all_dates = pd.DatetimeIndex([])
+        for df in self.price_data.values():
+            all_dates = all_dates.union(df.index)
         trading_dates = all_dates[(all_dates >= start_dt) & (all_dates <= end_dt)]
 
         if trading_dates.empty:
@@ -193,10 +194,13 @@ class PivotBreakoutBacktester:
                 except KeyError:
                     continue
 
+                # A gap through the stop/target fills at the open, not the level
                 if today_data["Low"] <= pos["stop_loss"]:
-                    self.close_position(ticker, date, pos["stop_loss"], "손절")
+                    exit_price = min(today_data["Open"], pos["stop_loss"])
+                    self.close_position(ticker, date, exit_price, "손절")
                 elif today_data["High"] >= pos["take_profit"]:
-                    self.close_position(ticker, date, pos["take_profit"], "익절")
+                    exit_price = max(today_data["Open"], pos["take_profit"])
+                    self.close_position(ticker, date, exit_price, "익절")
                 elif date > pos["holding_days_max"]:
                     self.close_position(ticker, date, today_data["Close"], "기간만료")
 
@@ -208,6 +212,12 @@ class PivotBreakoutBacktester:
                 signal = self.check_entry_signal(ticker, date)
                 if signal:
                     self.open_position(ticker, date, signal)
+
+        # 3. Close positions still open at the end so they count in the report
+        for ticker in list(self.open_positions.keys()):
+            df = self.price_data[ticker]
+            df = df[df.index <= end_dt]
+            self.close_position(ticker, df.index[-1], df["Close"].iloc[-1], "백테스트 종료")
 
         end_time = time.time()
         print(f"\n✅ 시뮬레이션 완료! (소요시간: {end_time - start_time:.2f}초)")
