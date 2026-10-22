@@ -16,12 +16,12 @@ import warnings
 from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import requests
 from pykrx import stock
 
 from .settings import settings
+from .signals import PIVOT_LOOKBACK_DAYS, add_pivot_indicators, check_pivot_breakout
 
 warnings.filterwarnings("ignore")
 
@@ -790,35 +790,31 @@ class BreakoutDetector:
             return None
 
     def detect_pivot_breakout(self, df: pd.DataFrame, ticker: str) -> Optional[Dict]:
-        """Detect pivot point breakout."""
-        if df is None or len(df) < 30:
+        """Detect pivot point breakout on the latest bar (see signals.py)."""
+        if df is None or len(df) <= PIVOT_LOOKBACK_DAYS:
             return None
 
         try:
-            recent = df.tail(30).copy()
-            avg_volume = recent["Volume"].iloc[:-1].mean()
-            current_volume = recent["Volume"].iloc[-1]
-            volume_surge = (current_volume / avg_volume - 1) * 100
-
-            close = recent["Close"].values
-            current_price = close[-1]
-            resistance = np.max(close[-20:-1])
-
-            breakout = current_price > resistance
-            breakout_pct = ((current_price - resistance) / resistance) * 100
-
-            if breakout and volume_surge >= settings.VOLUME_SURGE_MIN and 0 < breakout_pct <= settings.BREAKOUT_MAX:
-                signal = {
+            last = add_pivot_indicators(df).iloc[-1]
+            result = check_pivot_breakout(
+                close=last["Close"],
+                volume=last["Volume"],
+                resistance=last["Pivot_Resist"],
+                avg_volume=last["Avg_Volume"],
+                volume_surge_min=settings.VOLUME_SURGE_MIN,
+                breakout_max=settings.BREAKOUT_MAX,
+            )
+            if result:
+                return {
                     "ticker": ticker,
                     "name": self.get_stock_name(ticker),
                     "pattern": "피벗 돌파",
                     # pykrx gives numpy ints, which json and psycopg2 can't store
-                    "resistance": float(resistance),
-                    "current_price": float(current_price),
-                    "breakout_pct": round(breakout_pct, 2),
-                    "volume_surge": round(volume_surge, 2),
+                    "resistance": float(last["Pivot_Resist"]),
+                    "current_price": float(last["Close"]),
+                    "breakout_pct": round(result["breakout_pct"], 2),
+                    "volume_surge": round(result["volume_surge"], 2),
                 }
-                return signal
         except Exception:
             pass
 

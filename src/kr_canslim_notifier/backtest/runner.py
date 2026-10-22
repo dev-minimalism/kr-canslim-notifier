@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from pykrx import stock
 
+from ..signals import add_pivot_indicators, check_pivot_breakout
 from .config import BacktestConfig, default_config
 
 
@@ -72,11 +73,8 @@ class PivotBreakoutBacktester:
                 })
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
 
-                # Calculate indicators
-                df["Avg_Volume"] = df["Volume"].rolling(window=self.config.lookback_period).mean()
-                df["Pivot_Resist"] = (
-                    df["High"].shift(1).rolling(window=self.config.lookback_period).max()
-                )
+                # Same indicators as the live bot
+                df = add_pivot_indicators(df, lookback=self.config.lookback_period)
 
                 self.price_data[ticker] = df.dropna()
                 loaded += 1
@@ -95,30 +93,23 @@ class PivotBreakoutBacktester:
         except KeyError:
             return None
 
-        resistance = data["Pivot_Resist"]
-        current_close = data["Close"]
-        current_volume = data["Volume"]
-        avg_volume = data["Avg_Volume"]
-
-        # Volume surge check
-        if avg_volume <= 0:
+        result = check_pivot_breakout(
+            close=data["Close"],
+            volume=data["Volume"],
+            resistance=data["Pivot_Resist"],
+            avg_volume=data["Avg_Volume"],
+            volume_surge_min=self.config.volume_surge_pct,
+            breakout_max=self.config.breakout_pct_max,
+        )
+        if not result:
             return None
-        volume_surge = ((current_volume - avg_volume) / avg_volume) * 100
-        pass_volume = volume_surge >= self.config.volume_surge_pct
 
-        # Breakout check
-        breakout_pct = ((current_close - resistance) / resistance) * 100
-        pass_breakout = (current_close > resistance) and (0 < breakout_pct <= self.config.breakout_pct_max)
-
-        if pass_volume and pass_breakout:
-            return {
-                "entry_price": current_close,
-                "signal_type": "피벗 돌파",
-                "volume_surge": volume_surge,
-                "breakout_pct": breakout_pct,
-            }
-
-        return None
+        return {
+            "entry_price": float(data["Close"]),
+            "signal_type": "피벗 돌파",
+            "volume_surge": result["volume_surge"],
+            "breakout_pct": result["breakout_pct"],
+        }
 
     def open_position(self, ticker: str, date, signal: Dict):
         """Open new position."""

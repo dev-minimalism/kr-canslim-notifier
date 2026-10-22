@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from ..settings import settings
+from ..signals import PIVOT_LOOKBACK_DAYS
 
 
 def load_watchlist_tickers(path: str = settings.WATCHLIST_FILE) -> List[str]:
@@ -33,8 +34,9 @@ class BacktestConfig:
     initial_capital: float = float(os.getenv("BACKTEST_INITIAL_CAPITAL", "10000000"))
     position_size_pct: float = float(os.getenv("BACKTEST_POSITION_SIZE_PCT", "0.1"))
 
-    # Strategy (percent values, same units as the live bot)
-    lookback_period: int = int(os.getenv("BACKTEST_LOOKBACK_PERIOD", "20"))
+    # Strategy (percent values, same units as the live bot). Defaults match the
+    # bot; overriding them tests a different strategy than the bot trades.
+    lookback_period: int = int(os.getenv("BACKTEST_LOOKBACK_PERIOD", PIVOT_LOOKBACK_DAYS))
     volume_surge_pct: float = float(settings.VOLUME_SURGE_MIN)
     breakout_pct_max: float = float(settings.BREAKOUT_MAX)
 

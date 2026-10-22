@@ -44,7 +44,17 @@ Position state has its own lock, `positions_lock` (an `RLock`):
 
 **Scan flow** (`run_scan`): `check_positions()` (exits for stop-loss / take-profit / 30 days held) → for each watchlist ticker not already held: `get_stock_data` (pykrx OHLCV, Korean column names renamed to `Open/High/Low/Close/Volume`) → `detect_pivot_breakout` → on a signal: `add_position` at the current price first. The alert goes out only if the position was saved; otherwise the next scan retries the stock. After a successful DB write, `_refresh_positions_after_write()` reloads the list and only logs on failure, so a failed reload can't cancel an alert. Automatic scans only send a summary when there are signals; manual `/scan` always sends one.
 
-**Signal** (`detect_pivot_breakout`): needs ≥30 bars. Close > max of the previous 19 closes, volume ≥ `VOLUME_SURGE_MIN`% above the 29-bar average, and `0 < breakout% ≤ BREAKOUT_MAX`. `backtest/runner.py` (`PivotBreakoutBacktester`) reimplements the strategy on its own, and the two **currently differ**: the backtest uses the highest high of the previous 20 days and a 20-day volume average that includes today. Changes to the signal logic have to be made in both places. The backtest fills gap-through stops and targets at the open, and closes positions still open at `end_date` with reason `백테스트 종료`.
+**Signal** (`signals.py`, shared by the bot's `detect_pivot_breakout` and the backtest's `check_entry_signal`):
+- `add_pivot_indicators()` computes, over the previous `PIVOT_LOOKBACK_DAYS` (20) days with today excluded:
+  - `Pivot_Resist`: the highest **High**
+  - `Avg_Volume`: the mean Volume
+- `check_pivot_breakout()` requires volume ≥ `VOLUME_SURGE_MIN`% above average and `0 < breakout% ≤ BREAKOUT_MAX`.
+- Change the strategy only in `signals.py`. Never reimplement it in `bot.py` or `runner.py`.
+- In the live bot, today's bar is still in progress during market hours, so its volume is partial and the volume check is effectively stricter than in the backtest.
+
+**Backtest exits:**
+- A gap through the stop or the target fills at the open.
+- Positions still open at `end_date` are closed with reason `백테스트 종료`.
 
 **Storage** has two backends, chosen by `USE_DB` and checked throughout `bot.py` with `if self.use_db:`:
 - Positions: JSON (`positions.json`, atomic write through `.tmp` + `os.replace`) or PostgreSQL through `repository.PositionRepository`, which also writes `trade_history` and powers `/stats`. DB modules are imported lazily, so JSON mode doesn't need psycopg2 or sshtunnel. If the DB fails to initialize, the bot prints a warning and **silently falls back to JSON**.
