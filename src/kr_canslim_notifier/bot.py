@@ -812,8 +812,9 @@ class BreakoutDetector:
                     "ticker": ticker,
                     "name": self.get_stock_name(ticker),
                     "pattern": "피벗 돌파",
-                    "resistance": resistance,
-                    "current_price": current_price,
+                    # pykrx gives numpy ints, which json and psycopg2 can't store
+                    "resistance": float(resistance),
+                    "current_price": float(current_price),
                     "breakout_pct": round(breakout_pct, 2),
                     "volume_surge": round(volume_surge, 2),
                 }
