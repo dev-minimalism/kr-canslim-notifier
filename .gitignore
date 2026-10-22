@@ -26,7 +26,7 @@ ENV/
 .env.*.local
 
 # Config files with sensitive data
-config.py
+/config.py
 
 # Runtime data files (may contain personal info)
 positions.json
