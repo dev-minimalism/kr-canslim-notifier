@@ -52,9 +52,12 @@ Position state has its own lock, `positions_lock` (an `RLock`):
 - Change the strategy only in `signals.py`. Never reimplement it in `bot.py` or `runner.py`.
 - In the live bot, today's bar is still in progress during market hours, so its volume is partial and the volume check is effectively stricter than in the backtest.
 
-**Backtest exits:**
+**Backtest cash and exits** (`runner.py`):
+- Each buy costs a fixed `position_size` (initial capital × `position_size_pct`), paid from `self.cash`. A sale returns the stake plus P&L.
+- If cash can't cover `position_size`, the signal is skipped and counted in `skipped_signals`.
+- Same-day signals are bought in descending `volume_surge` order.
 - A gap through the stop or the target fills at the open.
-- Positions still open at `end_date` are closed with reason `백테스트 종료`.
+- Positions still open at `end_date` are closed with reason `백테스트 종료`, so `cash == initial_capital + sum(profit_amt)` at the end.
 
 **Storage** has two backends, chosen by `USE_DB` and checked throughout `bot.py` with `if self.use_db:`:
 - Positions: JSON (`positions.json`, atomic write through `.tmp` + `os.replace`) or PostgreSQL through `repository.PositionRepository`, which also writes `trade_history` and powers `/stats`. DB modules are imported lazily, so JSON mode doesn't need psycopg2 or sshtunnel. If the DB fails to initialize, the bot prints a warning and **silently falls back to JSON**.

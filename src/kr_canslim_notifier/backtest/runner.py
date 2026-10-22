@@ -28,8 +28,12 @@ class PivotBreakoutBacktester:
         self.price_data: Dict[str, pd.DataFrame] = {}
         self.trades_log: List[Dict] = []
         self.open_positions: Dict[str, Dict] = {}
-        self.capital = self.config.initial_capital
+        # Cash not tied up in positions. A signal is skipped when it can't
+        # cover one position, so total investment never exceeds capital.
+        self.cash = self.config.initial_capital
         self.position_size = self.config.initial_capital * self.config.position_size_pct
+        self.skipped_signals = 0
+        self.max_open_positions = 0
 
         print("📈 피벗 돌파 백테스터 초기화")
         print(f"   - 기간: {self.config.start_date} ~ {self.config.end_date}")
@@ -112,10 +116,11 @@ class PivotBreakoutBacktester:
         }
 
     def open_position(self, ticker: str, date, signal: Dict):
-        """Open new position."""
+        """Open new position. Caller checks that cash covers position_size."""
         entry_price = signal["entry_price"]
         name = self.get_stock_name(ticker)
 
+        self.cash -= self.position_size
         self.open_positions[ticker] = {
             "entry_date": date,
             "entry_price": entry_price,
@@ -135,7 +140,8 @@ class PivotBreakoutBacktester:
         profit_pct = (exit_price - entry_price) / entry_price
         profit_amt = self.position_size * profit_pct
 
-        self.capital += profit_amt
+        # Sale proceeds (stake plus profit or loss) return to cash
+        self.cash += self.position_size + profit_amt
 
         self.trades_log.append({
             "ticker": ticker,
@@ -195,14 +201,26 @@ class PivotBreakoutBacktester:
                 elif date > pos["holding_days_max"]:
                     self.close_position(ticker, date, today_data["Close"], "기간만료")
 
-            # 2. Check new entries
+            # 2. Check new entries: strongest volume surge first, skip once
+            #    cash can't cover a position
+            signals = []
             for ticker in self.price_data.keys():
                 if ticker in self.open_positions:
                     continue
 
                 signal = self.check_entry_signal(ticker, date)
                 if signal:
-                    self.open_position(ticker, date, signal)
+                    signals.append((ticker, signal))
+
+            signals.sort(key=lambda s: s[1]["volume_surge"], reverse=True)
+            for ticker, signal in signals:
+                if self.cash < self.position_size:
+                    self.skipped_signals += 1
+                    name = self.get_stock_name(ticker)
+                    print(f"  ⏭️  [건너뜀] {date.date()} | {name}({ticker}) | 현금 부족")
+                    continue
+                self.open_position(ticker, date, signal)
+                self.max_open_positions = max(self.max_open_positions, len(self.open_positions))
 
         # 3. Close positions still open at the end so they count in the report
         for ticker in list(self.open_positions.keys()):
@@ -267,6 +285,8 @@ class PivotBreakoutBacktester:
         print(f"  평균 수익: {avg_profit:+.2f}%")
         print(f"  평균 손실: {avg_loss:.2f}%")
         print(f"  Profit Factor: {profit_factor:.2f}")
+        print(f"  최대 동시 보유: {self.max_open_positions}종목")
+        print(f"  건너뛴 신호 (현금 부족): {self.skipped_signals}건")
         print("-" * 50)
 
         # Summary by ticker
