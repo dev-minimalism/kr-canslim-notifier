@@ -66,7 +66,7 @@ Position state has its own lock, `positions_lock` (an `RLock`):
 
 ## Gotchas
 
-- Hardcoded vs. configurable: stop-loss −8% (`entry*0.92`), take-profit +20% (`entry*1.20`), 30-day expiry, the 20-day lookback and the 120-day fetch window are all hardcoded in `bot.py`. `STOP_LOSS_PERCENT` and `ANALYSIS_PERIOD_DAYS` exist in `settings.py`/`.env.example` but **nothing reads them**. `WATCHLIST_FILE` is read only by the backtest; the bot always uses `watchlist.json`. In the bot, only `SCAN_INTERVAL`, `VOLUME_SURGE_MIN` and `BREAKOUT_MAX` affect behavior.
+- Hardcoded vs. configurable: stop-loss −8% (`entry*0.92`), take-profit +20% (`entry*1.20`), 30-day expiry and the 120-day fetch window are hardcoded in `bot.py`. The 20-day lookback is `PIVOT_LOOKBACK_DAYS` in `signals.py`. In the bot, only `SCAN_INTERVAL`, `VOLUME_SURGE_MIN` and `BREAKOUT_MAX` affect behavior. `WATCHLIST_FILE` is read only by the backtest; the bot always uses `watchlist.json`.
 - `load_positions()` raises on read failure (DB error or corrupt JSON). `check_positions()` then returns `False` and `run_scan` aborts. Never turn a failed read into `[]`: the "already held" check would pass for every stock and create duplicate alerts and positions.
 - For an unknown code, pykrx `get_market_ticker_name` returns an empty DataFrame instead of raising. Always go through `lookup_stock_name()` (returns `None`), `get_stock_name()` or `format_stock()`. Never call pykrx directly for names.
 - `is_market_open()` uses naive `datetime.now()` (09:00–15:30, weekdays, no holiday calendar), so it assumes the host runs in KST.

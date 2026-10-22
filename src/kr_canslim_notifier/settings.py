@@ -22,12 +22,6 @@ class Settings:
     VOLUME_SURGE_MIN: int = int(os.getenv("VOLUME_SURGE_MIN", "50"))
     BREAKOUT_MAX: int = int(os.getenv("BREAKOUT_MAX", "5"))
 
-    # Risk management
-    STOP_LOSS_PERCENT: float = float(os.getenv("STOP_LOSS_PERCENT", "-7.5"))
-
-    # Data settings
-    ANALYSIS_PERIOD_DAYS: int = int(os.getenv("ANALYSIS_PERIOD_DAYS", "120"))
-
     # Watchlist file
     WATCHLIST_FILE: str = os.getenv("WATCHLIST_FILE", "watchlist.json")
 

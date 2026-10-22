@@ -185,7 +185,7 @@ VOLUME_SURGE_MIN=50     # 거래량 급증 최소값 (%)
 BREAKOUT_MAX=5          # 돌파율 최대값 (%)
 ```
 
-> `.env.example`의 `STOP_LOSS_PERCENT`, `ANALYSIS_PERIOD_DAYS`는 현재 코드에서 사용되지 않습니다. 손절(-8%), 익절(+20%), 보유 기간(30일)은 코드에 고정되어 있습니다.
+> 실전 봇의 손절(-8%), 익절(+20%), 보유 기간(30일)은 코드에 고정되어 있습니다.
 
 ### PostgreSQL 모드
 
