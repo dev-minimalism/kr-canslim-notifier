@@ -32,13 +32,13 @@ black src/ && ruff check src/
 Everything runs in one process with two threads, plus one for each manual scan:
 
 1. **Main loop** (`__main__.run_bot`): calls `BreakoutDetector.run_scheduled_scan()` every `SCAN_INTERVAL` seconds (default 1800). Outside market hours it only runs `check_positions()`.
-2. **Command listener** (`start_command_listener`, daemon thread): long-polls Telegram `getUpdates` and only handles messages whose chat id matches `CHAT_ID`. `process_command` returns either a reply string or the sentinel `"SCAN"`. `"SCAN"` starts `_execute_scan_in_thread` in a new daemon thread, guarded by `scan_lock` + `is_scanning`. The scheduled scan also checks `is_scanning` and skips that cycle if a scan is running.
+2. **Command listener** (`start_command_listener`, daemon thread): long-polls Telegram `getUpdates` and only handles messages whose chat id matches `CHAT_ID`. `process_command` returns either a reply string or the sentinel `"SCAN"`. `"SCAN"` starts `_execute_scan_in_thread` in a new daemon thread. Manual and scheduled scans both take `scan_lock` with a non-blocking acquire and set `is_scanning`. If a scan is already running, the other one is skipped. Any new code path that scans or closes positions must hold the same lock, or duplicate alerts and closes come back.
 
 `bot.py` (`BreakoutDetector`) holds nearly all the logic: watchlist, positions, Telegram I/O, data fetching, signal detection and scanning.
 
 **Scan flow** (`run_scan`): `check_positions()` (exits for stop-loss / take-profit / 30 days held) → for each watchlist ticker not already held: `get_stock_data` (pykrx OHLCV, Korean column names renamed to `Open/High/Low/Close/Volume`) → `detect_pivot_breakout` → on a signal: send the alert **and** `add_position` at the current price. Automatic scans only send a summary when there are signals; manual `/scan` always sends one.
 
-**Signal** (`detect_pivot_breakout`): needs ≥30 bars. Close > max of the previous 19 closes, volume ≥ `VOLUME_SURGE_MIN`% above the 29-bar average, and `0 < breakout% ≤ BREAKOUT_MAX`. `backtest/runner.py` (`PivotBreakoutBacktester`) reimplements the same strategy on its own. Changes to the signal logic have to be made in both places.
+**Signal** (`detect_pivot_breakout`): needs ≥30 bars. Close > max of the previous 19 closes, volume ≥ `VOLUME_SURGE_MIN`% above the 29-bar average, and `0 < breakout% ≤ BREAKOUT_MAX`. `backtest/runner.py` (`PivotBreakoutBacktester`) reimplements the strategy on its own, and the two **currently differ**: the backtest uses the highest high of the previous 20 days and a 20-day volume average that includes today. Changes to the signal logic have to be made in both places. The backtest fills gap-through stops and targets at the open, and closes positions still open at `end_date` with reason `백테스트 종료`.
 
 **Storage** has two backends, chosen by `USE_DB` and checked throughout `bot.py` with `if self.use_db:`:
 - Positions: JSON (`positions.json`, atomic write through `.tmp` + `os.replace`) or PostgreSQL through `repository.PositionRepository`, which also writes `trade_history` and powers `/stats`. DB modules are imported lazily, so JSON mode doesn't need psycopg2 or sshtunnel. If the DB fails to initialize, the bot prints a warning and **silently falls back to JSON**.
@@ -47,7 +47,9 @@ Everything runs in one process with two threads, plus one for each manual scan:
 
 ## Gotchas
 
-- Hardcoded vs. configurable: stop-loss −8% (`entry*0.92`), take-profit +20% (`entry*1.20`), 30-day expiry, the 20-day lookback and the 120-day fetch window are all hardcoded in `bot.py`. `STOP_LOSS_PERCENT`, `ANALYSIS_PERIOD_DAYS` and `WATCHLIST_FILE` exist in `settings.py`/`.env.example` but **nothing reads them**. Only `SCAN_INTERVAL`, `VOLUME_SURGE_MIN` and `BREAKOUT_MAX` affect behavior.
+- Hardcoded vs. configurable: stop-loss −8% (`entry*0.92`), take-profit +20% (`entry*1.20`), 30-day expiry, the 20-day lookback and the 120-day fetch window are all hardcoded in `bot.py`. `STOP_LOSS_PERCENT` and `ANALYSIS_PERIOD_DAYS` exist in `settings.py`/`.env.example` but **nothing reads them**. `WATCHLIST_FILE` is read only by the backtest; the bot always uses `watchlist.json`. In the bot, only `SCAN_INTERVAL`, `VOLUME_SURGE_MIN` and `BREAKOUT_MAX` affect behavior.
+- `load_positions()` raises on read failure (DB error or corrupt JSON). `check_positions()` then returns `False` and `run_scan` aborts. Never turn a failed read into `[]`: the "already held" check would pass for every stock and create duplicate alerts and positions.
+- For an unknown code, pykrx `get_market_ticker_name` returns an empty DataFrame instead of raising. Always go through `lookup_stock_name()` (returns `None`), `get_stock_name()` or `format_stock()`. Never call pykrx directly for names.
 - `is_market_open()` uses naive `datetime.now()` (09:00–15:30, weekdays, no holiday calendar), so it assumes the host runs in KST.
 - `settings` is a class with attributes evaluated at import time (`load_dotenv()` runs on import). Env changes made after import have no effect.
 - Telegram messages use `parse_mode=HTML`. Escape `<`, `>`, `&` in dynamic text.
