@@ -89,7 +89,12 @@ class BreakoutDetector:
 
         # Load watchlist and positions
         self.watchlist = self.load_watchlist()
-        self.positions = self.load_positions()
+        try:
+            self.positions = self.load_positions()
+        except Exception as e:
+            # Each scan reloads positions and aborts if this still fails
+            print(f"⚠️  Failed to load positions: {e}")
+            self.positions = []
 
         storage_type = "PostgreSQL" if self.use_db else "JSON"
         print(f"✅ Storage: {storage_type}")
@@ -150,19 +155,18 @@ class BreakoutDetector:
         """Add stock to watchlist."""
         ticker = ticker.strip()
         if ticker in self.watchlist:
-            try:
-                name = stock.get_market_ticker_name(ticker)
-                return f"⚠️  {name}({ticker})은 이미 감시 중입니다."
-            except:
-                return f"⚠️  {ticker}은 이미 감시 중입니다."
+            return f"⚠️  {self.format_stock(ticker)}은 이미 감시 중입니다."
+
+        name = self.lookup_stock_name(ticker)
+        if not name:
+            return (
+                f"❌ 종목을 찾을 수 없습니다: {ticker}\n"
+                "6자리 종목코드를 입력해주세요.\n예) /add 005930"
+            )
 
         self.watchlist.append(ticker)
         if self.save_watchlist():
-            try:
-                name = stock.get_market_ticker_name(ticker)
-                return f"✅ {name}({ticker}) 추가됨!\n현재 감시 종목: {len(self.watchlist)}개"
-            except:
-                return f"✅ {ticker} 추가됨!\n현재 감시 종목: {len(self.watchlist)}개"
+            return f"✅ {name}({ticker}) 추가됨!\n현재 감시 종목: {len(self.watchlist)}개"
         else:
             self.watchlist.remove(ticker)
             return "❌ 저장 실패"
@@ -173,11 +177,7 @@ class BreakoutDetector:
         if ticker not in self.watchlist:
             return f"⚠️  {ticker}은 감시 목록에 없습니다."
 
-        try:
-            name = stock.get_market_ticker_name(ticker)
-            stock_display = f"{name}({ticker})"
-        except:
-            stock_display = ticker
+        stock_display = self.format_stock(ticker)
 
         self.watchlist.remove(ticker)
         if self.save_watchlist():
@@ -191,14 +191,7 @@ class BreakoutDetector:
         msg = f"📊 <b>감시 종목</b> ({len(self.watchlist)}개)\n\n"
 
         if self.watchlist:
-            items = []
-            for ticker in self.watchlist:
-                try:
-                    name = stock.get_market_ticker_name(ticker)
-                    items.append(f"{name}({ticker})")
-                except:
-                    items.append(ticker)
-            msg += "\n".join(items)
+            msg += "\n".join(self.format_stock(ticker) for ticker in self.watchlist)
         else:
             msg += "감시 종목 없음"
 
@@ -209,24 +202,21 @@ class BreakoutDetector:
     # ========================================
 
     def load_positions(self) -> List[Dict]:
-        """Load positions from storage (DB or file)."""
+        """Load positions from storage (DB or file).
+
+        Raises on read failure so a failed read is never mistaken for
+        "no positions" (which would bypass duplicate signal prevention).
+        """
         if self.use_db:
-            try:
-                repo = _get_position_repo()
-                return repo.get_all_open()
-            except Exception as e:
-                print(f"⚠️  Failed to load positions from DB: {e}")
-                return []
+            repo = _get_position_repo()
+            return repo.get_all_open()
 
         # JSON file storage
-        if os.path.exists(self.positions_file):
-            try:
-                with open(self.positions_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return data.get("positions", [])
-            except Exception as e:
-                print(f"⚠️  Failed to load positions: {e}")
-        return []
+        if not os.path.exists(self.positions_file):
+            return []
+        with open(self.positions_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("positions", [])
 
     def save_positions(self) -> bool:
         """Save positions to file (only for JSON mode)."""
@@ -337,12 +327,7 @@ class BreakoutDetector:
         profit_pct = result["profit_pct"]
         holding_days = result.get("holding_days", 0)
         pattern = result.get("pattern", "")
-
-        try:
-            name = stock.get_market_ticker_name(ticker)
-            ticker_display = f"{name}({ticker})"
-        except:
-            ticker_display = ticker
+        ticker_display = self.format_stock(ticker)
 
         msg = f"""
 🇰🇷 <b>[포지션 종료]</b>
@@ -366,13 +351,21 @@ class BreakoutDetector:
             return entry_date
         return datetime.strptime(entry_date, "%Y-%m-%d %H:%M:%S")
 
-    def check_positions(self):
-        """Check and manage open positions."""
+    def check_positions(self) -> bool:
+        """Check and manage open positions.
+
+        Returns:
+            False if positions could not be loaded from storage.
+        """
         # Refresh positions from storage
-        self.positions = self.load_positions()
+        try:
+            self.positions = self.load_positions()
+        except Exception as e:
+            print(f"❌ Failed to load positions: {e}")
+            return False
 
         if not self.positions:
-            return
+            return True
 
         print(f"\n📊 Checking positions... ({len(self.positions)})")
 
@@ -418,7 +411,10 @@ class BreakoutDetector:
     def list_positions(self) -> str:
         """Get positions display string."""
         # Refresh positions from storage
-        self.positions = self.load_positions()
+        try:
+            self.positions = self.load_positions()
+        except Exception as e:
+            return f"❌ 포지션 조회 실패: {e}"
 
         if not self.positions:
             return "📊 <b>보유 포지션</b>\n\n보유 중인 포지션이 없습니다."
@@ -429,12 +425,7 @@ class BreakoutDetector:
             ticker = pos["ticker"]
             entry_date = self._parse_entry_date(pos["entry_date"])
             holding_days = (datetime.now() - entry_date).days
-
-            try:
-                name = stock.get_market_ticker_name(ticker)
-                ticker_display = f"{name}({ticker})"
-            except:
-                ticker_display = ticker
+            ticker_display = self.format_stock(ticker)
 
             try:
                 df = self.get_stock_data(ticker, days=7)
@@ -650,6 +641,7 @@ class BreakoutDetector:
         try:
             self.is_scanning = True
             print("\n🔔 Scan command received - starting scan")
+            self.send_telegram_message("🇰🇷 스캔 시작...")
             self.run_scan(manual=True)
         except Exception as e:
             print(f"❌ Scan error: {e}")
@@ -679,9 +671,6 @@ class BreakoutDetector:
                                 reply = self.process_command(message_text)
 
                                 if reply == "SCAN":
-                                    self.send_telegram_message(
-                                        "🇰🇷 스캔 시작..."
-                                    )
                                     scan_thread = threading.Thread(
                                         target=self._execute_scan_in_thread,
                                         daemon=True,
@@ -713,13 +702,25 @@ class BreakoutDetector:
     # Stock Data & Pattern Detection
     # ========================================
 
-    def get_stock_name(self, ticker: str) -> str:
-        """Get stock name."""
+    def lookup_stock_name(self, ticker: str) -> Optional[str]:
+        """Get stock name, or None if the ticker is unknown.
+
+        pykrx returns an empty DataFrame (not an exception) for unknown tickers.
+        """
         try:
             name = stock.get_market_ticker_name(ticker)
-            return name if name else ticker
-        except:
-            return ticker
+        except Exception:
+            return None
+        return name if isinstance(name, str) and name else None
+
+    def get_stock_name(self, ticker: str) -> str:
+        """Get stock name, falling back to the ticker."""
+        return self.lookup_stock_name(ticker) or ticker
+
+    def format_stock(self, ticker: str) -> str:
+        """Format as "name(ticker)", or just the ticker if the name is unknown."""
+        name = self.lookup_stock_name(ticker)
+        return f"{name}({ticker})" if name else ticker
 
     def get_stock_data(self, ticker: str, days: int = 120) -> Optional[pd.DataFrame]:
         """Get stock data from pykrx."""
@@ -835,7 +836,14 @@ class BreakoutDetector:
         print(f"🇰🇷 감시 종목: {len(self.watchlist)}개")
         print(f"{'=' * 60}\n")
 
-        self.check_positions()
+        # 보유 포지션을 모르면 중복 신호를 막을 수 없으므로 스캔 중단
+        if not self.check_positions():
+            print("⛔ 포지션 조회 실패 - 스캔 중단\n")
+            if manual:
+                self.send_telegram_message(
+                    "❌ 포지션 조회에 실패해 스캔을 중단했습니다. 잠시 후 다시 시도해주세요."
+                )
+            return []
 
         all_signals = []
 
@@ -896,14 +904,24 @@ class BreakoutDetector:
         return all_signals
 
     def run_scheduled_scan(self) -> List[Dict]:
-        """Run scheduled scan based on market hours."""
-        if self.is_scanning:
+        """Run scheduled scan based on market hours.
+
+        Holds scan_lock like manual scans, so a /scan during a scheduled scan
+        (or vice versa) cannot produce duplicate signals or closes.
+        """
+        if not self.scan_lock.acquire(blocking=False):
             print("\n⏸️  Manual scan in progress. Skipping this cycle...\n")
             return []
 
-        if not self.is_market_open():
-            print(f"\n⏸️  Market closed. Waiting for next session...")
-            self.check_positions()
-            return []
+        try:
+            self.is_scanning = True
 
-        return self.run_scan()
+            if not self.is_market_open():
+                print("\n⏸️  Market closed. Waiting for next session...")
+                self.check_positions()
+                return []
+
+            return self.run_scan()
+        finally:
+            self.is_scanning = False
+            self.scan_lock.release()
