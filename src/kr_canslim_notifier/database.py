@@ -133,10 +133,27 @@ class DatabaseConnection:
         self.tunnel.close()
         return self.connect()
 
+    def _open_cursor(self, dict_cursor: bool):
+        """Connect and open a cursor, retrying connection errors."""
+        cursor_factory = RealDictCursor if dict_cursor else None
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                conn = self.connect() if attempt == 0 else self.reconnect()
+                return conn, conn.cursor(cursor_factory=cursor_factory)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                if attempt == self.MAX_RETRIES:
+                    raise
+                print(f"⚠️ DB connection error, retrying ({attempt + 1}/{self.MAX_RETRIES})...")
+
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True) -> Generator:
         """
         Get database cursor as context manager with auto-reconnect.
+
+        Only connecting is retried. A generator-based context manager can
+        yield once, so errors raised inside the `with` body are re-raised
+        unchanged; on a connection error the connection is dropped so the
+        next call reconnects.
 
         Args:
             dict_cursor: If True, return RealDictCursor for dict-like row access.
@@ -144,37 +161,24 @@ class DatabaseConnection:
         Yields:
             Database cursor.
         """
-        last_error = None
-
-        for attempt in range(self.MAX_RETRIES + 1):
+        conn, cursor = self._open_cursor(dict_cursor)
+        try:
+            yield cursor
+            conn.commit()
+        except Exception as e:
+            # On a dead connection rollback/close fail too; keep the original error
             try:
-                conn = self.connect() if attempt == 0 else self.reconnect()
-                cursor_factory = RealDictCursor if dict_cursor else None
-                cursor = conn.cursor(cursor_factory=cursor_factory)
-                try:
-                    yield cursor
-                    conn.commit()
-                    return  # Success
-                except Exception as e:
-                    conn.rollback()
-                    raise e
-                finally:
-                    cursor.close()
-
-            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-                last_error = e
-                if attempt < self.MAX_RETRIES:
-                    print(f"⚠️ DB connection error, retrying ({attempt + 1}/{self.MAX_RETRIES})...")
-                    self._close_connection()
-                    continue
-                raise
-
-            except Exception as e:
-                # Non-connection errors should not retry
-                raise e
-
-        if last_error:
-            raise last_error
+                conn.rollback()
+            except Exception:
+                pass
+            if isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+                self._close_connection()
+            raise
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def execute(self, query: str, params: tuple = None) -> list:
         """
